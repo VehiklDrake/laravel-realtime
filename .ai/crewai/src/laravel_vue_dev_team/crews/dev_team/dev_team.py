@@ -28,7 +28,8 @@ class DevTeamCrew:
     def llm(self) -> LLM:
         return LLM(
             model=os.getenv(
-                "CREWAI_MODEL", "openrouter/google/gemini-3.5-flash-lite"
+                "CREWAI_MODEL",
+                "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
             ),
             base_url=os.getenv("CREWAI_LLM_BASE_URL") or None,
         )
