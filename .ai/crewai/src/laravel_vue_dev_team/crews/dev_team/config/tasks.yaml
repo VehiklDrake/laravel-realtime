@@ -1,0 +1,68 @@
+architecture_task:
+  description: >
+    Analyze this request for the Laravel/Vue repository at {project_root}:
+
+    {development_request}
+
+    Inspect AGENTS.md, composer.json, package.json, relevant routes, models,
+    actions, controllers, Vue pages/components, and nearby tests. Check git status
+    and diff so existing user work is preserved. Produce a focused plan identifying
+    backend work, frontend work, exact likely files, tests, risks, and any part of
+    the request that is already implemented. Do not modify files.
+  expected_output: >
+    A concise implementation brief with sections for current behavior, proposed
+    design, backend changes, frontend changes, verification plan, risks, and a
+    concrete file list. Every recommendation must be tied to repository evidence.
+  agent: architect
+
+backend_task:
+  description: >
+    Implement the Laravel/backend portion of {development_request} using the
+    architecture brief and the repository at {project_root}.
+
+    Read AGENTS.md and relevant sibling files before editing. Preserve unrelated
+    dirty-worktree changes. Use Laravel generators when appropriate, named routes,
+    Form Requests, policies, actions/services, Eloquent, API Resources, events,
+    jobs, and Wayfinder according to existing project conventions. Add or update
+    focused Pest tests for every backend behavior. Run the minimum relevant tests
+    and run Pint on modified PHP files. If the request has no backend work, inspect
+    enough evidence to say so and make no changes.
+  expected_output: >
+    A backend implementation summary listing files changed, design decisions,
+    tests and formatting commands run with outcomes, plus any blocker or skipped
+    backend work. The repository itself must contain the implemented changes.
+  agent: laravel_engineer
+
+frontend_task:
+  description: >
+    Implement the Vue/Inertia/frontend portion of {development_request} using the
+    architecture brief, backend result, and repository at {project_root}.
+
+    Inspect existing components and styling conventions before editing. Preserve
+    unrelated work. Use Vue 3 Composition API, TypeScript, Inertia v3, Wayfinder,
+    Tailwind CSS v4, semantic HTML, keyboard access, visible focus states, and
+    responsive layouts as applicable. Reuse existing components and types. Run the
+    smallest relevant frontend validation commands. If the request has no frontend
+    work, inspect enough evidence to say so and make no changes.
+  expected_output: >
+    A frontend implementation summary listing files changed, interaction and
+    accessibility decisions, validation commands with outcomes, plus any blocker
+    or skipped frontend work. The repository itself must contain the changes.
+  agent: vue_engineer
+
+quality_task:
+  description: >
+    Verify the complete implementation of {development_request} in the repository
+    at {project_root}. Inspect git status and the full diff, then trace the changed
+    behavior across Laravel, Inertia, Vue, realtime boundaries, and tests. Run the
+    smallest relevant backend and frontend checks. Repair only defects directly
+    supported by repository evidence, rerun affected checks, and preserve unrelated
+    user changes. Do not commit, stage, migrate, reset, or delete user data.
+  expected_output: >
+    A final markdown report with: implementation summary, files changed, review
+    findings and repairs, exact verification commands and outcomes, remaining
+    risks or blockers, and a clear ready/not-ready conclusion. Never claim a check
+    passed unless it was actually run successfully.
+  agent: quality_engineer
+  markdown: true
+  output_file: output/development-report.md

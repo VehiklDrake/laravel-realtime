@@ -26,3 +26,7 @@ yarn-error.log
 /.nova
 /.vscode
 /.zed
+/.ai/crewai/.env
+/.ai/crewai/.venv
+/.ai/crewai/output
+/.ai/crewai/**/__pycache__/

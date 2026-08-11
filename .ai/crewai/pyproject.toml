@@ -1,0 +1,22 @@
+[project]
+name = "laravel_vue_dev_team"
+version = "0.1.0"
+description = "Repository-aware Laravel and Vue development team using CrewAI"
+authors = [{ name = "Your Name", email = "you@example.com" }]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "crewai[tools,google-genai]>=1.15.14,<2.0.0"
+]
+
+[project.scripts]
+kickoff = "laravel_vue_dev_team.main:kickoff"
+run_crew = "laravel_vue_dev_team.main:kickoff"
+plot = "laravel_vue_dev_team.main:plot"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.crewai]
+type = "flow"
+project_id = "1a91bde6-996a-4a42-877b-ac373d84be60"
