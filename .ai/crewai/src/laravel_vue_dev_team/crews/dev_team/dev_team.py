@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from crewai import Agent, Crew, Process, Task
+from crewai import Agent, Crew, LLM, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, crew, task
 
@@ -25,8 +25,13 @@ class DevTeamCrew:
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
 
-    def model(self) -> str:
-        return os.getenv("CREWAI_MODEL", "gemini/gemini-3.6-flash")
+    def llm(self) -> LLM:
+        return LLM(
+            model=os.getenv(
+                "CREWAI_MODEL", "openrouter/google/gemini-3.5-flash-lite"
+            ),
+            base_url=os.getenv("CREWAI_LLM_BASE_URL") or None,
+        )
 
     def max_requests_per_minute(self) -> int:
         configured_value = os.getenv("CREWAI_MAX_RPM", "10")
@@ -60,7 +65,7 @@ class DevTeamCrew:
     def architect(self) -> Agent:
         return Agent(
             config=self.agents_config["architect"],  # type: ignore[index]
-            llm=self.model(),
+            llm=self.llm(),
             tools=self.read_tools(),
         )
 
@@ -68,7 +73,7 @@ class DevTeamCrew:
     def laravel_engineer(self) -> Agent:
         return Agent(
             config=self.agents_config["laravel_engineer"],  # type: ignore[index]
-            llm=self.model(),
+            llm=self.llm(),
             tools=self.development_tools(),
         )
 
@@ -76,7 +81,7 @@ class DevTeamCrew:
     def vue_engineer(self) -> Agent:
         return Agent(
             config=self.agents_config["vue_engineer"],  # type: ignore[index]
-            llm=self.model(),
+            llm=self.llm(),
             tools=self.development_tools(),
         )
 
@@ -84,7 +89,7 @@ class DevTeamCrew:
     def quality_engineer(self) -> Agent:
         return Agent(
             config=self.agents_config["quality_engineer"],  # type: ignore[index]
-            llm=self.model(),
+            llm=self.llm(),
             tools=self.development_tools(),
         )
 

@@ -5,7 +5,7 @@ description = "Repository-aware Laravel and Vue development team using CrewAI"
 authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "crewai[tools,google-genai]>=1.15.14,<2.0.0"
+    "crewai[tools,google-genai,litellm]>=1.15.14,<2.0.0"
 ]
 
 [project.scripts]
