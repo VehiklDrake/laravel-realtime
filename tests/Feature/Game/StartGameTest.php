@@ -6,7 +6,11 @@ use App\Events\RoundStarted;
 use App\Jobs\EndRound;
 use App\Models\Game;
 use App\Models\Player;
+use Illuminate\Broadcasting\BroadcastException;
+use Illuminate\Contracts\Broadcasting\Broadcaster;
+use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Queue;
 
 beforeEach(function () {
@@ -61,4 +65,41 @@ it('cannot start an active game twice', function () {
         ->postJson(route('games.start', $this->game))
         ->assertUnprocessable()
         ->assertJsonValidationErrors('game');
+});
+
+it('returns the started game when the realtime transport is unavailable', function () {
+    Exceptions::fake(BroadcastException::class);
+
+    config([
+        'broadcasting.default' => 'failing',
+        'broadcasting.connections.failing' => ['driver' => 'failing'],
+    ]);
+
+    Broadcast::extend('failing', fn (): Broadcaster => new class implements Broadcaster
+    {
+        public function auth(mixed $request): never
+        {
+            throw new BroadcastException('Realtime transport unavailable.');
+        }
+
+        public function validAuthenticationResponse(mixed $request, mixed $result): never
+        {
+            throw new BroadcastException('Realtime transport unavailable.');
+        }
+
+        public function broadcast(array $channels, mixed $event, array $payload = []): never
+        {
+            throw new BroadcastException('Realtime transport unavailable.');
+        }
+    });
+
+    Queue::fake();
+
+    $this->withSession(sessionFor($this->host))
+        ->postJson(route('games.start', $this->game))
+        ->assertSuccessful()
+        ->assertJsonPath('game.status', GameStatus::Playing->value)
+        ->assertJsonPath('game.current_round', 1);
+
+    Exceptions::assertReportedCount(2);
 });

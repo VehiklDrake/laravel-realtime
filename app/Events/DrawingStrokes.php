@@ -5,13 +5,14 @@ namespace App\Events;
 use App\Models\DrawingStroke;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PresenceChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Contracts\Broadcasting\ShouldRescue;
 use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class DrawingStrokes implements ShouldBroadcast, ShouldDispatchAfterCommit
+class DrawingStrokes implements ShouldBroadcastNow, ShouldDispatchAfterCommit, ShouldRescue
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
@@ -47,6 +48,7 @@ class DrawingStrokes implements ShouldBroadcast, ShouldDispatchAfterCommit
             'strokes' => $this->strokes->map(fn (DrawingStroke $stroke): array => [
                 'id' => $stroke->id,
                 'player_id' => $stroke->player_id,
+                'client_id' => $stroke->client_id,
                 'from_x' => $stroke->from_x,
                 'from_y' => $stroke->from_y,
                 'to_x' => $stroke->to_x,

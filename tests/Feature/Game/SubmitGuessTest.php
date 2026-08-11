@@ -3,6 +3,8 @@
 use App\Enums\GameStatus;
 use App\Events\ChatMessage;
 use App\Events\CorrectGuess;
+use App\Events\RoundEnded;
+use App\Jobs\AdvanceRound;
 use App\Models\Game;
 use App\Models\Guess;
 use App\Models\Player;
@@ -47,7 +49,7 @@ it('broadcasts and stores an incorrect guess as chat', function () {
     Event::assertDispatched(ChatMessage::class, fn (ChatMessage $event) => $event->guess->is($guess));
 });
 
-it('stores a guess and queues its broadcast without blocking the response', function () {
+it('stores a guess and broadcasts it immediately', function () {
     Queue::fake();
 
     $this->withSession(sessionFor($this->guesser))
@@ -59,7 +61,30 @@ it('stores a guess and queues its broadcast without blocking the response', func
         ->assertJsonPath('correct', false);
 
     expect(Guess::query()->sole()->message)->toBe('A castle');
-    Queue::assertPushed(BroadcastEvent::class, 1);
+    Queue::assertNotPushed(BroadcastEvent::class);
+});
+
+it('ends a solved round and schedules a five second intermission', function () {
+    $this->otherGuesser->delete();
+    Queue::fake();
+    Event::fake([CorrectGuess::class, RoundEnded::class]);
+
+    $this->withSession(sessionFor($this->guesser))
+        ->postJson(route('games.guesses.store', $this->game), [
+            'round_id' => $this->round->id,
+            'message' => 'ice cream',
+        ])
+        ->assertSuccessful()
+        ->assertJsonPath('correct', true);
+
+    expect($this->round->refresh()->ended_at)->toEqual(now())
+        ->and($this->game->refresh()->current_round)->toBe(1)
+        ->and($this->game->rounds()->count())->toBe(1);
+    Event::assertDispatched(RoundEnded::class);
+    Queue::assertPushed(AdvanceRound::class, function (AdvanceRound $job): bool {
+        return $job->roundId === $this->round->id
+            && $job->delay->equalTo(now()->addSeconds(5));
+    });
 });
 
 it('normalizes a correct answer and awards a time bonus exactly once', function () {

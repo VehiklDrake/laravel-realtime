@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Collection;
 class RecordDrawing
 {
     /**
-     * @param  list<array{from_x: float|int, from_y: float|int, to_x: float|int, to_y: float|int, color: string, size: int}>  $strokes
+     * @param  list<array{client_id: string, from_x: float|int, from_y: float|int, to_x: float|int, to_y: float|int, color: string, size: int}>  $strokes
      * @return Collection<int, DrawingStroke>
      */
     public function handle(Game $game, Player $player, int $roundId, array $strokes): Collection
@@ -29,10 +29,13 @@ class RecordDrawing
         $recordedStrokes = new Collection;
 
         foreach ($strokes as $stroke) {
-            $recordedStroke = $round->drawingStrokes()->create([
-                ...$stroke,
-                'player_id' => $player->id,
-            ]);
+            $recordedStroke = $round->drawingStrokes()->firstOrCreate(
+                ['client_id' => $stroke['client_id']],
+                [
+                    ...$stroke,
+                    'player_id' => $player->id,
+                ],
+            );
 
             $recordedStrokes->push($recordedStroke);
         }

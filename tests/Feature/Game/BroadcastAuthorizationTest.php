@@ -57,3 +57,15 @@ it('preserves unsynced strokes and clears a successfully submitted guess', funct
         ->and(file_get_contents(resource_path('js/pages/Games/Room.vue')))
         ->toContain("guessRequest.message = '';");
 });
+
+it('streams authenticated drawing strokes directly between room clients', function () {
+    expect(file_get_contents(resource_path('js/pages/Games/Room.vue')))
+        ->toContain("listenForWhisper('drawing-strokes', receiveLiveStrokes)")
+        ->toContain("presence.channel().whisper('drawing-strokes'")
+        ->toContain('Number(metadata.user_id) !== round.drawer_id')
+        ->toContain('window.requestAnimationFrame(flushLiveStrokes)');
+
+    expect(file_get_contents(resource_path('js/components/game/DrawingCanvas.vue')))
+        ->toContain("typeof crypto.randomUUID === 'function'")
+        ->toContain('crypto.getRandomValues(new Uint8Array(16))');
+});

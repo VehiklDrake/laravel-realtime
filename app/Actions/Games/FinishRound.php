@@ -3,19 +3,18 @@
 namespace App\Actions\Games;
 
 use App\Enums\GameStatus;
-use App\Events\GameFinished;
 use App\Events\RoundEnded;
+use App\Jobs\AdvanceRound;
 use App\Models\Game;
 use App\Models\Round;
+use DateTimeInterface;
 use Illuminate\Support\Facades\DB;
 
 class FinishRound
 {
-    public function __construct(private StartRound $startRound) {}
-
-    public function handle(Round $round): void
+    public function handle(Round $round, ?DateTimeInterface $endedAt = null): void
     {
-        $result = DB::transaction(function () use ($round): ?array {
+        $finishedRound = DB::transaction(function () use ($round, $endedAt): ?Round {
             $lockedRound = Round::query()->with('game')->lockForUpdate()->find($round->id);
 
             if (! $lockedRound || $lockedRound->ended_at !== null) {
@@ -28,34 +27,21 @@ class FinishRound
                 return null;
             }
 
-            $lockedRound->update(['ended_at' => now()]);
+            $resolvedEndedAt = $endedAt && $endedAt < now() ? $endedAt : now();
+            $lockedRound->update(['ended_at' => $resolvedEndedAt]);
 
-            if ($lockedRound->number >= $game->total_rounds) {
-                $game->update(['status' => GameStatus::Finished]);
-
-                return ['round' => $lockedRound, 'game' => $game, 'finished' => true];
-            }
-
-            return ['round' => $lockedRound, 'game' => $game, 'finished' => false];
+            return $lockedRound->refresh();
         });
 
-        if (! $result) {
+        if (! $finishedRound) {
             return;
         }
 
-        /** @var Round $finishedRound */
-        $finishedRound = $result['round'];
-        /** @var Game $game */
-        $game = $result['game'];
+        $game = $finishedRound->game;
 
         RoundEnded::dispatch($finishedRound, $game->players()->orderByDesc('score')->get());
-
-        if ($result['finished']) {
-            GameFinished::dispatch($game->refresh());
-
-            return;
-        }
-
-        $this->startRound->handle($game->refresh(), $finishedRound->number + 1);
+        AdvanceRound::dispatch($finishedRound->id)
+            ->delay($finishedRound->ended_at->addSeconds(config('game.round_intermission_duration')))
+            ->afterCommit();
     }
 }

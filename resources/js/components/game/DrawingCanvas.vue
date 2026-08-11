@@ -46,6 +46,7 @@ let lastPoint: { x: number; y: number } | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let flushTimer: number | null = null;
 let isUnmounted = false;
+let renderedStrokeCount = 0;
 
 function context(): CanvasRenderingContext2D | null {
     return canvas.value?.getContext('2d') ?? null;
@@ -86,6 +87,7 @@ function redraw(): void {
     drawingContext.fillStyle = '#ffffff';
     drawingContext.fillRect(0, 0, element.width, element.height);
     props.strokes.forEach(drawStroke);
+    renderedStrokeCount = props.strokes.length;
 }
 
 function resize(): void {
@@ -117,6 +119,21 @@ function point(event: PointerEvent): { x: number; y: number } {
     };
 }
 
+function createClientId(): string {
+    if (typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hexadecimal = Array.from(bytes, (byte) =>
+        byte.toString(16).padStart(2, '0'),
+    ).join('');
+
+    return `${hexadecimal.slice(0, 8)}-${hexadecimal.slice(8, 12)}-${hexadecimal.slice(12, 16)}-${hexadecimal.slice(16, 20)}-${hexadecimal.slice(20)}`;
+}
+
 function startDrawing(event: PointerEvent): void {
     if (!props.canDraw || props.disabled) {
         return;
@@ -134,6 +151,7 @@ function continueDrawing(event: PointerEvent): void {
 
     const nextPoint = point(event);
     const stroke: Stroke = {
+        client_id: createClientId(),
         from_x: lastPoint.x,
         from_y: lastPoint.y,
         to_x: nextPoint.x,
@@ -144,6 +162,7 @@ function continueDrawing(event: PointerEvent): void {
 
     drawStroke(stroke);
     emit('stroke', stroke);
+    renderedStrokeCount = props.strokes.length;
     pendingStrokes.push(stroke);
     lastPoint = nextPoint;
     scheduleFlush();
@@ -215,7 +234,21 @@ async function clearCanvas(): Promise<void> {
 
 watch(
     () => props.strokes.length,
-    () => redraw(),
+    (strokeCount, previousStrokeCount) => {
+        if (
+            strokeCount > previousStrokeCount &&
+            renderedStrokeCount === previousStrokeCount
+        ) {
+            props.strokes.slice(previousStrokeCount).forEach(drawStroke);
+            renderedStrokeCount = strokeCount;
+
+            return;
+        }
+
+        if (renderedStrokeCount !== strokeCount) {
+            redraw();
+        }
+    },
 );
 
 onMounted(() => {
@@ -247,6 +280,7 @@ onBeforeUnmount(() => {
         >
             <canvas
                 ref="canvas"
+                :data-stroke-count="strokes.length"
                 class="h-full w-full touch-none"
                 :class="
                     canDraw && !disabled ? 'cursor-crosshair' : 'cursor-default'

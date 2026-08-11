@@ -6,11 +6,12 @@ use App\Models\DrawingStroke as DrawingStrokeModel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PresenceChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Contracts\Broadcasting\ShouldRescue;
 use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class DrawingStroke implements ShouldBroadcastNow, ShouldDispatchAfterCommit
+class DrawingStroke implements ShouldBroadcastNow, ShouldDispatchAfterCommit, ShouldRescue
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
@@ -43,6 +44,7 @@ class DrawingStroke implements ShouldBroadcastNow, ShouldDispatchAfterCommit
             'stroke' => [
                 'id' => $this->stroke->id,
                 'player_id' => $this->stroke->player_id,
+                'client_id' => $this->stroke->client_id,
                 'from_x' => $this->stroke->from_x,
                 'from_y' => $this->stroke->from_y,
                 'to_x' => $this->stroke->to_x,

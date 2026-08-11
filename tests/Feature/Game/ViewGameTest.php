@@ -5,12 +5,15 @@ use App\Models\Game;
 use App\Models\Guess;
 use App\Models\Player;
 use App\Models\Round;
+use Illuminate\Support\Facades\Date;
 use Inertia\Testing\AssertableInertia as Assert;
 
 beforeEach(function () {
     $this->game = Game::factory()->create();
     $this->host = Player::factory()->host()->for($this->game)->create();
 });
+
+afterEach(fn () => Date::setTestNow());
 
 it('asks visitors to join when they do not have a room session', function () {
     $this->get(route('games.show', $this->game))
@@ -59,7 +62,7 @@ it('rejects state requests from non-members', function () {
     $this->getJson(route('games.state', $this->game))->assertForbidden();
 });
 
-it('keeps guess history visible when a new round starts', function () {
+it('starts each round with an empty guess box', function () {
     $guesser = Player::factory()->for($this->game)->create();
     $firstRound = Round::factory()->for($this->game)->for($this->host, 'drawer')->ended()->create([
         'number' => 1,
@@ -82,9 +85,40 @@ it('keeps guess history visible when a new round starts', function () {
     $this->withSession(sessionFor($this->host))
         ->getJson(route('games.state', $this->game))
         ->assertSuccessful()
-        ->assertJsonCount(2, 'round.messages')
-        ->assertJsonPath('round.messages.0.message', 'pizzas')
-        ->assertJsonPath('round.messages.0.round_number', 1)
-        ->assertJsonPath('round.messages.1.message', 'test')
-        ->assertJsonPath('round.messages.1.round_number', 2);
+        ->assertJsonCount(1, 'round.messages')
+        ->assertJsonPath('round.messages.0.message', 'test')
+        ->assertJsonPath('round.messages.0.round_number', 2)
+        ->assertJsonMissing(['message' => 'pizzas']);
+});
+
+it('describes who solved an ended round and how many attempts it took', function () {
+    Date::setTestNow('2026-08-05 12:00:20');
+    $guesser = Player::factory()->for($this->game)->create();
+    $round = Round::factory()->for($this->game)->for($this->host, 'drawer')->create([
+        'number' => 1,
+        'word' => 'pizza',
+        'started_at' => now()->subSeconds(20),
+        'ends_at' => now()->addSeconds(40),
+        'ended_at' => now(),
+    ]);
+    Guess::factory()->for($round)->for($guesser)->create([
+        'message' => 'pie',
+        'is_correct' => false,
+        'created_at' => $round->started_at->addSeconds(5),
+    ]);
+    Guess::factory()->for($round)->for($guesser)->create([
+        'message' => 'pizza',
+        'is_correct' => true,
+        'created_at' => $round->started_at->addSeconds(12),
+    ]);
+    $this->game->update(['status' => GameStatus::Playing, 'current_round' => 1]);
+
+    $this->withSession(sessionFor($this->host))
+        ->getJson(route('games.state', $this->game))
+        ->assertSuccessful()
+        ->assertJsonPath('round.word', 'pizza')
+        ->assertJsonPath('round.result.reason', 'correct')
+        ->assertJsonPath('round.result.correct_guesses.0.player', $guesser->name)
+        ->assertJsonPath('round.result.correct_guesses.0.seconds', 12)
+        ->assertJsonPath('round.result.correct_guesses.0.guess_count', 2);
 });

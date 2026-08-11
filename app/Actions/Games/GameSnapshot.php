@@ -24,10 +24,12 @@ class GameSnapshot
             $round->load([
                 'drawer',
                 'drawingStrokes' => fn ($query) => $query->oldest('id'),
+                'guesses' => fn ($query) => $query->with('player')->oldest('id'),
             ]);
         }
 
         return [
+            'server_time' => now()->toISOString(),
             'game' => [
                 'id' => $game->id,
                 'code' => $game->code,
@@ -35,6 +37,7 @@ class GameSnapshot
                 'current_round' => $game->current_round,
                 'total_rounds' => $game->total_rounds,
                 'round_duration' => $game->round_duration,
+                'round_intermission_duration' => config('game.round_intermission_duration'),
                 'players' => $game->players->map(fn (Player $player): array => [
                     'id' => $player->id,
                     'name' => $player->name,
@@ -67,12 +70,14 @@ class GameSnapshot
             'started_at' => $round->started_at->toISOString(),
             'ends_at' => $round->ends_at->toISOString(),
             'ended_at' => $round->ended_at?->toISOString(),
+            'result' => $this->roundResult($round),
             'word' => $canSeeWord ? $round->word : null,
             'masked_word' => $canSeeWord ? null : Str::of($round->word)
                 ->replaceMatches('/[^\s]/u', '_')
                 ->toString(),
             'strokes' => $round->drawingStrokes->map(fn ($stroke): array => [
                 'id' => $stroke->id,
+                'client_id' => $stroke->client_id,
                 'from_x' => $stroke->from_x,
                 'from_y' => $stroke->from_y,
                 'to_x' => $stroke->to_x,
@@ -80,15 +85,43 @@ class GameSnapshot
                 'color' => $stroke->color,
                 'size' => $stroke->size,
             ])->all(),
-            'messages' => $game->rounds()
-                ->with(['guesses' => fn ($query) => $query->with('player')->oldest('id')])
-                ->oldest('number')
-                ->get()
-                ->flatMap(fn (Round $messageRound) => $messageRound->guesses->map(
-                    fn (Guess $guess): array => $this->message($messageRound, $guess),
-                ))
+            'messages' => $round->guesses
+                ->map(fn (Guess $guess): array => $this->message($round, $guess))
                 ->values()
                 ->all(),
+        ];
+    }
+
+    /** @return array<string, mixed>|null */
+    private function roundResult(Round $round): ?array
+    {
+        if (! $round->ended_at) {
+            return null;
+        }
+
+        $correctGuesses = $round->guesses
+            ->where('is_correct', true)
+            ->map(function (Guess $correctGuess) use ($round): array {
+                $guessCount = $round->guesses
+                    ->where('player_id', $correctGuess->player_id)
+                    ->where('id', '<=', $correctGuess->id)
+                    ->count();
+
+                return [
+                    'player_id' => $correctGuess->player_id,
+                    'player' => $correctGuess->player->name,
+                    'seconds' => (int) $round->started_at->diffInSeconds($correctGuess->created_at),
+                    'guess_count' => $guessCount,
+                ];
+            })
+            ->values();
+
+        return [
+            'reason' => $correctGuesses->isEmpty() ? 'timeout' : 'correct',
+            'intermission_ends_at' => $round->ended_at
+                ->addSeconds(config('game.round_intermission_duration'))
+                ->toISOString(),
+            'correct_guesses' => $correctGuesses->all(),
         ];
     }
 

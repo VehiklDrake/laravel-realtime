@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Form, Head, useHttp } from '@inertiajs/vue3';
+import { Form, Head, Link, useHttp } from '@inertiajs/vue3';
 import { useConnectionStatus, useEchoPresence } from '@laravel/echo-vue';
 import {
     computed,
@@ -12,11 +12,14 @@ import {
 import GameStateController from '@/actions/App/Http/Controllers/GameStateController';
 import GuessController from '@/actions/App/Http/Controllers/GuessController';
 import LeaveGameController from '@/actions/App/Http/Controllers/LeaveGameController';
+import ProgressGameController from '@/actions/App/Http/Controllers/ProgressGameController';
 import StartGameController from '@/actions/App/Http/Controllers/StartGameController';
 import DrawingCanvas from '@/components/game/DrawingCanvas.vue';
+import { home } from '@/routes';
 import type { Game, GameState, Message, Player, Round, Stroke } from '@/types';
 
 const props = defineProps<{
+    server_time: string;
     game: Game;
     player: Player;
     round: Round | null;
@@ -25,9 +28,11 @@ const props = defineProps<{
 type PresenceMember = { id: number; name: string };
 type ChatPayload = { message: Message };
 type StrokesPayload = { round_id: number; strokes: Stroke[] };
+type WhisperMetadata = { user_id?: string };
 type CorrectPayload = { player: Player; points: number; message: Message };
 
 const state = ref<GameState>({
+    server_time: props.server_time,
     game: props.game,
     player: props.player,
     round: props.round,
@@ -37,10 +42,12 @@ const copied = ref(false);
 const guessFailed = ref(false);
 const isClientMounted = ref(false);
 const now = ref(0);
+const serverClockOffset = ref(Date.parse(props.server_time) - Date.now());
 const messagesPanel = ref<HTMLElement | null>(null);
 const connectionStatus = useConnectionStatus();
 const stateRequest = useHttp<Record<string, never>, GameState>({});
 const startRequest = useHttp<Record<string, never>, GameState>({});
+const progressRequest = useHttp<Record<string, never>, GameState>({});
 const guessRequest = useHttp<
     { round_id: number; message: string },
     { correct: boolean; points: number; message: Message }
@@ -49,10 +56,16 @@ const channelName = `game.${props.game.id}`;
 
 let clockTimer: number | null = null;
 let reconcileTimer: number | null = null;
+let progressRetryTimer: number | null = null;
+let progressAttemptKey: string | null = null;
+let liveStrokeFrame: number | null = null;
+const pendingLiveStrokes: Stroke[] = [];
 
 const currentGame = computed(() => state.value.game);
 const currentPlayer = computed(() => state.value.player);
 const currentRound = computed(() => state.value.round);
+const roundResult = computed(() => currentRound.value?.result ?? null);
+const synchronizedNow = computed(() => now.value + serverClockOffset.value);
 const isDrawer = computed(
     () => currentRound.value?.drawer_id === currentPlayer.value.id,
 );
@@ -70,21 +83,64 @@ const remainingSeconds = computed(() => {
 
     return Math.max(
         0,
-        Math.ceil((Date.parse(currentRound.value.ends_at) - now.value) / 1000),
+        Math.ceil(
+            (Date.parse(currentRound.value.ends_at) - synchronizedNow.value) /
+                1000,
+        ),
     );
 });
+const intermissionSeconds = computed(() => {
+    if (!roundResult.value || !isClientMounted.value) {
+        return 0;
+    }
+
+    return Math.max(
+        0,
+        Math.ceil(
+            (Date.parse(roundResult.value.intermission_ends_at) -
+                synchronizedNow.value) /
+                1000,
+        ),
+    );
+});
+const displayedTimerSeconds = computed(() =>
+    roundResult.value ? intermissionSeconds.value : remainingSeconds.value,
+);
 const timerProgress = computed(
-    () => (remainingSeconds.value / currentGame.value.round_duration) * 100,
+    () =>
+        (displayedTimerSeconds.value /
+            (roundResult.value
+                ? currentGame.value.round_intermission_duration
+                : currentGame.value.round_duration)) *
+        100,
 );
 const timerLabel = computed(() => {
-    const minutes = Math.floor(remainingSeconds.value / 60);
-    const seconds = remainingSeconds.value % 60;
+    const minutes = Math.floor(displayedTimerSeconds.value / 60);
+    const seconds = displayedTimerSeconds.value % 60;
 
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+});
+const progressKey = computed(() => {
+    if (
+        !isClientMounted.value ||
+        currentGame.value.status !== 'playing' ||
+        !currentRound.value
+    ) {
+        return null;
+    }
+
+    if (roundResult.value) {
+        return intermissionSeconds.value === 0
+            ? `advance-${currentRound.value.id}`
+            : null;
+    }
+
+    return remainingSeconds.value === 0 ? `end-${currentRound.value.id}` : null;
 });
 const winner = computed(() => currentGame.value.players[0] ?? null);
 
 function sync(nextState: GameState): void {
+    serverClockOffset.value = Date.parse(nextState.server_time) - Date.now();
     state.value = nextState;
 }
 
@@ -101,6 +157,36 @@ async function refreshState(): Promise<void> {
         );
     } catch {
         // The reactive request state displays connectivity errors without disrupting play.
+    }
+}
+
+async function progressGame(key: string): Promise<void> {
+    if (progressRequest.processing || progressAttemptKey === key) {
+        return;
+    }
+
+    progressAttemptKey = key;
+
+    try {
+        sync(
+            await progressRequest.post(
+                ProgressGameController.url(currentGame.value.code),
+            ),
+        );
+    } catch {
+        // The retry below keeps the server-authoritative timer moving after a transient failure.
+    } finally {
+        if (progressRetryTimer !== null) {
+            window.clearTimeout(progressRetryTimer);
+        }
+
+        progressRetryTimer = window.setTimeout(() => {
+            progressAttemptKey = null;
+
+            if (progressKey.value === key) {
+                void progressGame(key);
+            }
+        }, 1000);
     }
 }
 
@@ -144,7 +230,107 @@ function addStroke(stroke: Stroke): void {
         return;
     }
 
+    if (stroke.client_id) {
+        const existingIndex = currentRound.value.strokes.findIndex(
+            (existingStroke) => existingStroke.client_id === stroke.client_id,
+        );
+
+        if (existingIndex !== -1) {
+            currentRound.value.strokes[existingIndex] = {
+                ...currentRound.value.strokes[existingIndex],
+                ...stroke,
+            };
+
+            return;
+        }
+    }
+
     currentRound.value.strokes.push(stroke);
+}
+
+function streamStroke(stroke: Stroke): void {
+    addStroke(stroke);
+    pendingLiveStrokes.push(stroke);
+
+    if (liveStrokeFrame === null) {
+        liveStrokeFrame = window.requestAnimationFrame(flushLiveStrokes);
+    }
+}
+
+function flushLiveStrokes(): void {
+    liveStrokeFrame = null;
+
+    const round = currentRound.value;
+    const strokes = pendingLiveStrokes.splice(0);
+
+    if (
+        strokes.length === 0 ||
+        connectionStatus.value !== 'connected' ||
+        !round ||
+        round.drawer_id !== currentPlayer.value.id
+    ) {
+        return;
+    }
+
+    presence.channel().whisper('drawing-strokes', {
+        round_id: round.id,
+        strokes,
+    });
+}
+
+function isLiveStroke(stroke: unknown): stroke is Stroke {
+    if (!stroke || typeof stroke !== 'object') {
+        return false;
+    }
+
+    const candidate = stroke as Partial<Stroke>;
+    const coordinates = [
+        candidate.from_x,
+        candidate.from_y,
+        candidate.to_x,
+        candidate.to_y,
+    ];
+
+    return (
+        typeof candidate.client_id === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            candidate.client_id,
+        ) &&
+        coordinates.every(
+            (coordinate) =>
+                typeof coordinate === 'number' &&
+                Number.isFinite(coordinate) &&
+                coordinate >= 0 &&
+                coordinate <= 1,
+        ) &&
+        typeof candidate.color === 'string' &&
+        /^#[0-9a-f]{6}$/i.test(candidate.color) &&
+        Number.isInteger(candidate.size) &&
+        Number(candidate.size) >= 1 &&
+        Number(candidate.size) <= 32
+    );
+}
+
+function receiveLiveStrokes(
+    payload: StrokesPayload,
+    metadata: WhisperMetadata,
+): void {
+    const round = currentRound.value;
+
+    if (
+        !round ||
+        payload.round_id !== round.id ||
+        Number(metadata.user_id) !== round.drawer_id ||
+        round.drawer_id === currentPlayer.value.id ||
+        !Array.isArray(payload.strokes) ||
+        payload.strokes.length > 100
+    ) {
+        return;
+    }
+
+    payload.strokes.filter(isLiveStroke).forEach((stroke) => {
+        addStroke({ ...stroke, player_id: round.drawer_id });
+    });
 }
 
 function clearStrokes(): void {
@@ -244,12 +430,19 @@ watch(
     },
 );
 
+watch(progressKey, (key) => {
+    if (key) {
+        void progressGame(key);
+    }
+});
+
 onMounted(() => {
     now.value = Date.now();
     isClientMounted.value = true;
 
     presence
         .channel()
+        .listenForWhisper('drawing-strokes', receiveLiveStrokes)
         .here((members: PresenceMember[]) => {
             onlinePlayerIds.value = members.map((member) => member.id);
         })
@@ -269,12 +462,24 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+    presence
+        .channel()
+        .stopListeningForWhisper('drawing-strokes', receiveLiveStrokes);
+
+    if (liveStrokeFrame !== null) {
+        window.cancelAnimationFrame(liveStrokeFrame);
+    }
+
     if (clockTimer !== null) {
         window.clearInterval(clockTimer);
     }
 
     if (reconcileTimer !== null) {
         window.clearInterval(reconcileTimer);
+    }
+
+    if (progressRetryTimer !== null) {
+        window.clearTimeout(progressRetryTimer);
     }
 });
 </script>
@@ -321,13 +526,14 @@ onBeforeUnmount(() => {
                         <div
                             class="mb-1 flex items-center justify-between text-xs font-black uppercase"
                         >
-                            <span
-                                >Round {{ currentRound.number }} /
-                                {{ currentGame.total_rounds }}</span
-                            >
+                            <span>
+                                Round {{ currentRound.number }} /
+                                {{ currentGame.total_rounds }}
+                                {{ roundResult ? 'complete' : '' }}
+                            </span>
                             <span
                                 :class="
-                                    remainingSeconds <= 10
+                                    displayedTimerSeconds <= 10
                                         ? 'text-red-600'
                                         : 'text-zinc-600'
                                 "
@@ -340,7 +546,7 @@ onBeforeUnmount(() => {
                             <div
                                 class="h-full bg-lime-400 transition-[width] duration-300"
                                 :class="{
-                                    'bg-red-400': remainingSeconds <= 10,
+                                    'bg-red-400': displayedTimerSeconds <= 10,
                                 }"
                                 :style="{ width: `${timerProgress}%` }"
                             />
@@ -369,7 +575,7 @@ onBeforeUnmount(() => {
                         }}
                     </span>
                     <Form
-                        v-if="currentGame.status !== 'playing'"
+                        v-if="currentGame.status === 'waiting'"
                         v-bind="LeaveGameController.form(currentGame.code)"
                         #default="{ processing }"
                     >
@@ -524,6 +730,73 @@ onBeforeUnmount(() => {
         </section>
 
         <section
+            v-else-if="
+                currentGame.status === 'playing' && currentRound && roundResult
+            "
+            class="mx-auto grid min-h-[calc(100vh-74px)] w-full max-w-4xl place-items-center px-5 py-12"
+        >
+            <div
+                class="w-full rounded-[2rem] border-3 border-zinc-900 bg-white p-7 text-center shadow-[8px_8px_0_#18181b] sm:p-10"
+            >
+                <div class="text-6xl">
+                    {{ roundResult.reason === 'correct' ? '🎉' : '⏰' }}
+                </div>
+                <p
+                    class="mt-5 text-xs font-black tracking-[0.22em] text-violet-600 uppercase"
+                >
+                    Round {{ currentRound.number }} complete
+                </p>
+                <h1 class="mt-2 text-5xl font-black tracking-tight">
+                    {{
+                        roundResult.reason === 'correct'
+                            ? 'That’s the word!'
+                            : 'Time’s up!'
+                    }}
+                </h1>
+                <p class="mt-4 text-lg font-bold text-zinc-500">
+                    The word was
+                    <span class="font-mono text-2xl text-zinc-900">{{
+                        currentRound.word
+                    }}</span>
+                </p>
+
+                <div
+                    v-if="roundResult.correct_guesses.length"
+                    class="mx-auto mt-7 grid max-w-xl gap-3"
+                >
+                    <div
+                        v-for="correctGuess in roundResult.correct_guesses"
+                        :key="correctGuess.player_id"
+                        class="rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-4 font-bold text-emerald-900"
+                    >
+                        <span class="font-black">{{
+                            correctGuess.player
+                        }}</span>
+                        solved it in {{ correctGuess.seconds }} seconds after
+                        {{ correctGuess.guess_count }}
+                        {{
+                            correctGuess.guess_count === 1
+                                ? 'guess'
+                                : 'guesses'
+                        }}.
+                    </div>
+                </div>
+                <p v-else class="mt-7 font-bold text-zinc-500">
+                    Nobody found it this round.
+                </p>
+
+                <p class="mt-8 text-sm font-black text-violet-600">
+                    {{
+                        currentRound.number === currentGame.total_rounds
+                            ? 'Final scores'
+                            : 'Next round'
+                    }}
+                    in {{ intermissionSeconds }}…
+                </p>
+            </div>
+        </section>
+
+        <section
             v-else-if="currentGame.status === 'playing' && currentRound"
             class="mx-auto grid w-full max-w-[1500px] gap-4 px-4 py-5 lg:grid-cols-[240px_minmax(0,1fr)_320px] lg:px-6"
         >
@@ -609,7 +882,7 @@ onBeforeUnmount(() => {
                     :strokes="currentRound.strokes"
                     :can-draw="isDrawer"
                     :disabled="remainingSeconds === 0"
-                    @stroke="addStroke"
+                    @stroke="streamStroke"
                     @cleared="clearStrokes"
                 />
             </div>
@@ -745,19 +1018,12 @@ onBeforeUnmount(() => {
                     </div>
                 </div>
 
-                <Form
-                    v-bind="LeaveGameController.form(currentGame.code)"
-                    class="mt-8"
-                    #default="{ processing }"
+                <Link
+                    :href="home()"
+                    class="mt-8 inline-block rounded-2xl border-2 border-zinc-900 bg-violet-600 px-7 py-3 font-black text-white shadow-[3px_3px_0_#18181b]"
                 >
-                    <button
-                        type="submit"
-                        :disabled="processing"
-                        class="rounded-2xl border-2 border-zinc-900 bg-violet-600 px-7 py-3 font-black text-white shadow-[3px_3px_0_#18181b]"
-                    >
-                        Back home
-                    </button>
-                </Form>
+                    Back home
+                </Link>
             </div>
         </section>
 

@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $id
  * @property int $round_id
  * @property int $player_id
+ * @property string|null $client_id
  * @property float $from_x
  * @property float $from_y
  * @property float $to_x
@@ -19,7 +20,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string $color
  * @property int $size
  */
-#[Fillable(['round_id', 'player_id', 'from_x', 'from_y', 'to_x', 'to_y', 'color', 'size'])]
+#[Fillable(['round_id', 'player_id', 'client_id', 'from_x', 'from_y', 'to_x', 'to_y', 'color', 'size'])]
 class DrawingStroke extends Model
 {
     /** @use HasFactory<DrawingStrokeFactory> */

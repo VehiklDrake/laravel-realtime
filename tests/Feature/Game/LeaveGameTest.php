@@ -41,3 +41,13 @@ it('keeps active players in the game for reconnecting', function () {
 
     $this->assertModelExists($this->guest);
 });
+
+it('navigates home without submitting the leave endpoint after a game finishes', function () {
+    $room = file_get_contents(resource_path('js/pages/Games/Room.vue'));
+
+    expect($room)
+        ->toContain("import { Form, Head, Link, useHttp } from '@inertiajs/vue3';")
+        ->toContain("import { home } from '@/routes';")
+        ->toContain('v-if="currentGame.status === \'waiting\'"')
+        ->toContain(':href="home()"');
+});

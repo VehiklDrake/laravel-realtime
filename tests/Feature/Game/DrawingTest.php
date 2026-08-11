@@ -17,6 +17,7 @@ beforeEach(function () {
     $this->guesser = Player::factory()->for($this->game)->create();
     $this->round = Round::factory()->for($this->game)->for($this->drawer, 'drawer')->active()->create(['number' => 1]);
     $this->stroke = [
+        'client_id' => fake()->uuid(),
         'from_x' => 0.1,
         'from_y' => 0.2,
         'to_x' => 0.25,
@@ -40,14 +41,16 @@ it('records and broadcasts drawer strokes', function () {
     $stroke = DrawingStrokeModel::query()->sole();
     expect($stroke->round->is($this->round))->toBeTrue()
         ->and($stroke->player->is($this->drawer))->toBeTrue()
-        ->and($stroke->color)->toBe('#18181b');
+        ->and($stroke->color)->toBe('#18181b')
+        ->and($stroke->client_id)->toBe($this->stroke['client_id']);
     Event::assertDispatched(DrawingStrokes::class, fn (DrawingStrokes $event) => $event->strokes->contains($stroke)
-        && $event->broadcastWith()['round_id'] === $this->round->id);
+        && $event->broadcastWith()['round_id'] === $this->round->id
+        && $event->broadcastWith()['strokes'][0]['client_id'] === $this->stroke['client_id']);
 });
 
-it('persists an entire stroke batch before queueing one broadcast', function () {
+it('persists an entire stroke batch and broadcasts it immediately', function () {
     Queue::fake();
-    $secondStroke = [...$this->stroke, 'from_x' => 0.25, 'to_x' => 0.4];
+    $secondStroke = [...$this->stroke, 'client_id' => fake()->uuid(), 'from_x' => 0.25, 'to_x' => 0.4];
 
     $this->withSession(sessionFor($this->drawer))
         ->postJson(route('games.drawing.store', $this->game), [
@@ -58,7 +61,27 @@ it('persists an entire stroke batch before queueing one broadcast', function () 
         ->assertJsonPath('recorded', 2);
 
     expect(DrawingStrokeModel::query()->count())->toBe(2);
-    Queue::assertPushed(BroadcastEvent::class, 1);
+    Queue::assertNotPushed(BroadcastEvent::class);
+});
+
+it('stores retried stroke batches idempotently', function () {
+    Event::fake([DrawingStrokes::class]);
+    $payload = [
+        'round_id' => $this->round->id,
+        'strokes' => [$this->stroke],
+    ];
+
+    $this->withSession(sessionFor($this->drawer))
+        ->postJson(route('games.drawing.store', $this->game), $payload)
+        ->assertSuccessful()
+        ->assertJsonPath('recorded', 1);
+
+    $this->withSession(sessionFor($this->drawer))
+        ->postJson(route('games.drawing.store', $this->game), $payload)
+        ->assertSuccessful()
+        ->assertJsonPath('recorded', 1);
+
+    expect(DrawingStrokeModel::query()->count())->toBe(1);
 });
 
 it('allows only the current drawer to draw', function () {

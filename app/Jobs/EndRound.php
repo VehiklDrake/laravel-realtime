@@ -30,7 +30,7 @@ class EndRound implements ShouldBeUnique, ShouldQueue
         $round = Round::query()->find($this->roundId);
 
         if ($round) {
-            $finishRound->handle($round);
+            $finishRound->handle($round, $round->ends_at);
         }
     }
 

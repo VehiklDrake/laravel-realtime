@@ -3,6 +3,7 @@
 return [
     'rounds' => 3,
     'round_duration' => 60,
+    'round_intermission_duration' => 5,
     'min_players' => 2,
     'max_players' => 8,
     'correct_guess_points' => 100,

@@ -22,6 +22,7 @@ class DrawingStrokeFactory extends Factory
         return [
             'round_id' => Round::factory(),
             'player_id' => Player::factory(),
+            'client_id' => fake()->uuid(),
             'from_x' => fake()->randomFloat(4, 0, 1),
             'from_y' => fake()->randomFloat(4, 0, 1),
             'to_x' => fake()->randomFloat(4, 0, 1),
